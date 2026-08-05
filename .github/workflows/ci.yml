@@ -52,12 +52,22 @@ jobs:
       # The concurrency bug that 0.1.1 fixed: TLC extracts the standard modules
       # to java.io.tmpdir under fixed names and deletes them on exit, so
       # concurrent checks used to delete each other's copies. Re-running the
-      # whole suite with everything forced to run at once, without cache, is
-      # what makes that regression visible instead of intermittent.
+      # whole suite with everything forced to run at once is what makes that
+      # regression visible instead of intermittent.
+      #
+      # ⛔ `--disk_cache=` IS LOAD-BEARING. `bazel clean` empties the output
+      # base but NOT the disk cache setup-bazel persists across runs, so on the
+      # second and every later run the TlcCheck actions would be served from
+      # cache, no TLC would start, and this step would pass having tested
+      # nothing — while still printing a reassuring "5 tests pass". Verified by
+      # counting TLC invocations in the job log, which is the only thing that
+      # distinguishes the two.
       - name: concurrency — no shared-tmpdir race
         run: |
           bazel clean
-          bazel test //... --jobs=8 --nocache_test_results --test_output=errors
+          bazel test //... --jobs=8 --disk_cache= --nocache_test_results --test_output=errors
+          echo "note: this step is only meaningful if TLC actually started;"
+          echo "grep the job log for 'TLC2 Version' and expect one per check."
 
   buildifier:
     name: buildifier lint
