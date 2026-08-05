@@ -1,0 +1,41 @@
+load("@rules_tla//tla:defs.bzl", "tla_check")
+
+# THE FAILURE PATH, ASSERTED RATHER THAN ASSUMED.
+#
+# Each of these specs genuinely breaks, and each target passes only when TLC
+# reports THAT kind of break. Between them they cover every outcome the README
+# claims `tla_check` catches. A rule that stopped noticing violations would
+# turn all three red, which is the property `expect = "ok"` alone cannot buy:
+# a green suite made of green specs cannot tell you whether it can fail.
+
+tla_check(
+    name = "violates_invariant_check",
+    config = "ViolatesInvariant.cfg",
+    expect = "invariant_violation",
+    module = "ViolatesInvariant.tla",
+)
+
+tla_check(
+    name = "deadlocks_check",
+    config = "Deadlocks.cfg",
+    expect = "deadlock",
+    module = "Deadlocks.tla",
+)
+
+tla_check(
+    name = "never_settles_check",
+    config = "NeverSettles.cfg",
+    expect = "temporal_violation",
+    module = "NeverSettles.tla",
+)
+
+# The one probe that cannot live in a green suite: a violated invariant under
+# the DEFAULT expectation, which must turn the build red. CI builds it and
+# asserts a non-zero exit; see .github/workflows/ci.yml. Tagged manual so
+# `bazel test //...` does not pick it up.
+tla_check(
+    name = "must_fail_probe",
+    config = "ViolatesInvariant.cfg",
+    module = "ViolatesInvariant.tla",
+    tags = ["manual"],
+)

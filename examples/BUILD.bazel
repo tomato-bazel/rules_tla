@@ -4,6 +4,15 @@ load("@rules_tla//tla:defs.bzl", "tla_check")
 # spec (safety invariant + liveness property). `bazel test //examples:counter_check`.
 tla_check(
     name = "counter_check",
-    module = "Counter.tla",
     config = "Counter.cfg",
+    module = "Counter.tla",
+)
+
+# The same, but EXTENDS a module supplied through `deps` from another package.
+# This is the regression test for the TLA-Library bug — see tla/private/tla_check.bzl.
+tla_check(
+    name = "sensor_check",
+    config = "Sensor.cfg",
+    module = "Sensor.tla",
+    deps = ["//examples/lib:bounded"],
 )

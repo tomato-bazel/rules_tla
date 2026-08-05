@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same ref. Without this a merge burst stacks
+# runs and exhausts the fleet.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Both platforms, deliberately. Development is darwin-arm64 and CI is ubuntu,
+  # and the two disagree about things this ruleset depends on: which JDK the
+  # java runtime toolchain resolves, whether `timeout(1)` exists (it does not on
+  # macOS, which is why the watchdog is hand-rolled), and BSD vs GNU grep. A
+  # ruleset that is only green on one of them is green by luck.
+  test:
+    name: bazel test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.10.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
+          repository-cache: true
+      - name: bazel test //...
+        run: bazel test //... --test_output=errors
+
+      # ⛔ THE ONE CHECK A GREEN SUITE CANNOT MAKE. Every other target in this
+      # repo passes; none of them establishes that the rule is CAPABLE of
+      # failing. This builds a spec whose invariant is genuinely violated, under
+      # the default expectation, and demands a non-zero exit. rules_verilog
+      # shipped "structurally complete, no smoke verification" and was red from
+      # the day it shipped without anyone noticing; this step is the difference.
+      - name: failure path — a violated invariant must turn the build red
+        run: |
+          if bazel build //examples/failure:must_fail_probe.run; then
+            echo "::error::rules_tla accepted a spec whose invariant TLC reported as violated"
+            exit 1
+          fi
+          echo "ok: a violated invariant fails the build"
+
+      # The concurrency bug that 0.1.1 fixed: TLC extracts the standard modules
+      # to java.io.tmpdir under fixed names and deletes them on exit, so
+      # concurrent checks used to delete each other's copies. Re-running the
+      # whole suite with everything forced to run at once, without cache, is
+      # what makes that regression visible instead of intermittent.
+      - name: concurrency — no shared-tmpdir race
+        run: |
+          bazel clean
+          bazel test //... --jobs=8 --nocache_test_results --test_output=errors
+
+  buildifier:
+    name: buildifier lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install buildifier
+        run: |
+          curl -fsSL -o /usr/local/bin/buildifier \
+            https://github.com/bazelbuild/buildtools/releases/download/v7.3.1/buildifier-linux-amd64
+          chmod +x /usr/local/bin/buildifier
+      - run: buildifier --mode=check --lint=warn -r .

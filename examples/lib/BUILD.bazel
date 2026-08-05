@@ -1,0 +1,8 @@
+load("@rules_tla//tla:defs.bzl", "tla_library")
+
+package(default_visibility = ["//visibility:public"])
+
+tla_library(
+    name = "bounded",
+    srcs = ["Bounded.tla"],
+)
