@@ -41,12 +41,32 @@ def _tla_check_run_impl(ctx):
     # touches the read-only sandboxed input tree. Fail on non-zero exit (TLC
     # returns non-zero on violations) and also scan the log as a belt-and-braces
     # guard for the rare "exit 0 but violated" case.
+    #
+    # ⛔ `-Djava.io.tmpdir` IS LOAD-BEARING AND ITS ABSENCE IS A CONCURRENCY BUG, NOT A
+    # TIDINESS ISSUE. TLC does not read the standard modules (Naturals, Sequences,
+    # FiniteSets, …) from the jar in place — it EXTRACTS them to `java.io.tmpdir` under
+    # FIXED names and registers them for deleteOnExit. Two `tla_check` targets building
+    # concurrently therefore extract to the same paths and delete each other's copies,
+    # and the loser fails with
+    #
+    #     Error: source file 'Sequences.tla' has apparently been deleted.
+    #     Error: Parsing or semantic analysis failed.
+    #
+    # ⚠ WHICH LOOKS LIKE A BROKEN SPEC, NOT A RACE. Measured in tomato-bazel/infra with 11
+    # tla_check targets: roughly one run in three had 2-3 spurious failures, each naming a
+    # different module, and every one of them passed when re-run alone. A test suite that
+    # fails a third of the time for a reason that points at the user's own file is worse
+    # than no suite at all.
+    #
+    # `$MD` is already per-action (mktemp -d) and already cleaned up by the trap, so
+    # pointing the JVM at it costs nothing and makes the extraction private.
     command = """
 set -uo pipefail
 MD="$(mktemp -d)"
 trap 'rm -rf "$MD"' EXIT
 LOG="$MD/tlc.log"
-if ! "{java}" -XX:+UseParallelGC -DTLA-Library="{libpath}" -cp "{jar}" tlc2.TLC \
+if ! "{java}" -XX:+UseParallelGC -Djava.io.tmpdir="$MD" -DTLA-Library="{libpath}" \
+        -cp "{jar}" tlc2.TLC \
         -metadir "$MD" -config "{config}" "{module}" 2>&1 | tee "$LOG"; then
     echo "rules_tla: TLC exited non-zero" >&2
     exit 1
