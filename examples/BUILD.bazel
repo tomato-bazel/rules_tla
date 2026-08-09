@@ -7,3 +7,16 @@ tla_check(
     module = "Counter.tla",
     config = "Counter.cfg",
 )
+
+# ⛔ THE SELF-TEST FOR `expect_violation`. `Broken.tla` violates its invariant by
+# construction, so this target passes only if the inverted verdict works.
+#
+# Without it, `expect_violation` could silently stop inverting — and every gate in
+# every consumer built on it would go green while proving nothing. That is precisely
+# the failure the attribute exists to prevent, one level up.
+tla_check(
+    name = "expect_violation_check",
+    module = "Broken.tla",
+    config = "Broken.cfg",
+    expect_violation = True,
+)

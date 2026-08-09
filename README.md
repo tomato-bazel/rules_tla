@@ -45,15 +45,45 @@ bazel test //path/to:merge_queue_check
 A `tla_check` passes iff TLC exits cleanly and reports no violation. A safety
 (`INVARIANT`), deadlock, or temporal (`PROPERTY`) violation fails the test.
 
+### Proving a property has teeth
+
+A passing check tells you the property held. It does not tell you the property
+**could ever have failed** — and that gap is not theoretical. A spec that models
+the program somebody meant to write proves true statements about nothing, reads
+exactly like a spec that works, and never goes red.
+
+So pair each check with one that mutates a constant until the defect is reachable,
+and require the violation:
+
+```starlark
+tla_check(name = "safety", module = "Spec.tla", config = "Safety.cfg")
+
+tla_check(
+    name = "mutation_put_does_not_record",
+    module = "Spec.tla",
+    config = "MutationNoRecordOnPut.cfg",
+    expect_violation = True,
+)
+```
+
+`expect_violation = True` inverts the verdict: the target **fails when the check
+comes back clean**. A green mutation target means the property it mutates has
+stopped constraining anything.
+
+⚠ A parse or semantic error is not a violation. TLC exits non-zero for both, so
+SANY's errors are detected separately and fail the target in either mode —
+otherwise an inverted target would go green on a spec that no longer compiles.
+
 ## Rules
 
 - **`tla_library(name, srcs, deps)`** — a group of `.tla` modules plus transitive
   `tla_library` deps. Provides `TlaInfo` (transitive sources) and its files via
   `DefaultInfo`. Directories of all transitive sources are placed on TLC's module
   search path (`TLA-Library`), so specs may `EXTENDS` modules from deps.
-- **`tla_check(name, module, config, deps)`** — model-check `module` (a `.tla`)
-  against `config` (a `.cfg`) with TLC, as a `bazel test`. Implemented as a build
-  action (running TLC) gated by a `build_test`, so it needs no runfiles wiring.
+- **`tla_check(name, module, config, deps, expect_violation)`** — model-check
+  `module` (a `.tla`) against `config` (a `.cfg`) with TLC, as a `bazel test`.
+  Implemented as a build action (running TLC) gated by a `build_test`, so it needs
+  no runfiles wiring. `expect_violation = True` inverts the verdict — see above.
 
 ## Scope
 

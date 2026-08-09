@@ -60,14 +60,37 @@ def _tla_check_run_impl(ctx):
     #
     # `$MD` is already per-action (mktemp -d) and already cleaned up by the trap, so
     # pointing the JVM at it costs nothing and makes the extraction private.
-    command = """
-set -uo pipefail
-MD="$(mktemp -d)"
-trap 'rm -rf "$MD"' EXIT
-LOG="$MD/tlc.log"
-if ! "{java}" -XX:+UseParallelGC -Djava.io.tmpdir="$MD" -DTLA-Library="{libpath}" \
-        -cp "{jar}" tlc2.TLC \
-        -metadir "$MD" -config "{config}" "{module}" 2>&1 | tee "$LOG"; then
+    # ⭐ `expect_violation` INVERTS BOTH CHECKS, AND IT IS WHAT KEEPS A SPEC HONEST.
+    # A model check that passes tells you the property held; it does not tell you the
+    # property could ever have failed. A spec that idealises the thing it models — one
+    # whose actions describe the program somebody meant to write — proves true things
+    # about nothing, silently and forever, and reads exactly like a spec that works.
+    #
+    # The fix is a target per defect: mutate one constant so the implementation's real
+    # (or historical) behaviour is reachable, and REQUIRE the violation. A green run on
+    # an expect_violation target means the property has stopped constraining anything.
+    #
+    # ⚠ A parse or semantic error is NOT a violation. TLC exits non-zero for both, so an
+    # inverted target would otherwise pass on a spec that no longer compiles — which is
+    # the same failure one level up. `^Error:` from SANY is checked for separately and
+    # fails either way.
+    if ctx.attr.expect_violation:
+        verdict = """
+if grep -qiE '^Error: (Parsing|Semantic|Evaluation)|was not (parsed|found)|Unknown location' "$LOG"; then
+    echo "rules_tla: the spec did not compile — an expect_violation target cannot be satisfied by a broken spec" >&2
+    exit 1
+fi
+if grep -qiE 'is violated|Temporal properties were violated|Deadlock reached' "$LOG"; then
+    echo "rules_tla: violation reported, as this target requires"
+else
+    echo "rules_tla: EXPECTED A VIOLATION AND TLC REPORTED NONE." >&2
+    echo "  The property this target mutates no longer constrains anything." >&2
+    exit 1
+fi
+"""
+    else:
+        verdict = """
+if [ "$TLC_OK" -ne 0 ]; then
     echo "rules_tla: TLC exited non-zero" >&2
     exit 1
 fi
@@ -75,6 +98,23 @@ if grep -qiE 'is violated|Temporal properties were violated|Deadlock reached|^Er
     echo "rules_tla: TLC reported a violation" >&2
     exit 1
 fi
+"""
+
+    command = """
+set -uo pipefail
+MD="$(mktemp -d)"
+trap 'rm -rf "$MD"' EXIT
+LOG="$MD/tlc.log"
+# Run without `set -e` semantics: an expect_violation target NEEDS the non-zero
+# exit, so the status is captured rather than allowed to abort the script.
+if "{java}" -XX:+UseParallelGC -Djava.io.tmpdir="$MD" -DTLA-Library="{libpath}" \
+        -cp "{jar}" tlc2.TLC \
+        -metadir "$MD" -config "{config}" "{module}" 2>&1 | tee "$LOG"; then
+    TLC_OK=0
+else
+    TLC_OK=1
+fi
+{verdict}
 touch "{marker}"
 """.format(
         java = java,
@@ -83,6 +123,7 @@ touch "{marker}"
         config = config.path,
         module = module.path,
         marker = marker.path,
+        verdict = verdict,
     )
 
     ctx.actions.run_shell(
@@ -111,6 +152,10 @@ _tla_check_run = rule(
             providers = [TlaInfo],
             doc = "tla_library targets the module EXTENDS.",
         ),
+        "expect_violation": attr.bool(
+            default = False,
+            doc = "Require TLC to report a violation. The target FAILS if the check passes.",
+        ),
         "_tla2tools": attr.label(
             default = "@tla2tools//file",
             allow_single_file = True,
@@ -119,7 +164,7 @@ _tla_check_run = rule(
     toolchains = ["@bazel_tools//tools/jdk:runtime_toolchain_type"],
 )
 
-def tla_check(name, module, config, deps = [], **kwargs):
+def tla_check(name, module, config, deps = [], expect_violation = False, **kwargs):
     """Model-check a TLA+ spec with TLC, as a `bazel test` target.
 
     Args:
@@ -127,6 +172,15 @@ def tla_check(name, module, config, deps = [], **kwargs):
       module: the root `.tla` module.
       config: the `.cfg` file (SPECIFICATION / INVARIANT / PROPERTY / CONSTANTS).
       deps: `tla_library` targets the module EXTENDS.
+      expect_violation: invert the verdict — the target passes only if TLC reports
+        a violation, and FAILS if the check comes back clean.
+
+        ⭐ This is how a spec is kept honest. Passing tells you a property held; it
+        does not tell you the property could ever have failed. Pair each real check
+        with a target that mutates one constant so the defect is reachable, and
+        require the violation. If that target ever goes green, the property has
+        stopped constraining anything — which is exactly how a spec ends up proving
+        true statements about a program nobody wrote.
       **kwargs: forwarded to the wrapping `build_test` (e.g. tags, size).
     """
     _tla_check_run(
@@ -134,6 +188,7 @@ def tla_check(name, module, config, deps = [], **kwargs):
         module = module,
         config = config,
         deps = deps,
+        expect_violation = expect_violation,
         testonly = True,
         tags = ["manual"],
     )
