@@ -74,36 +74,50 @@ jobs:
           owner: tomato-bazel
           repositories: roma
           permission-contents: read
-      - name: Run the released Roma CLI
-        id: roma
-        uses: tomato-bazel/setup-tbzl/roma@428328ffda053d43c00e466a6665ead1bec9efd5
-        with:
-          version: ${{ inputs.version }}
-          source: ${{ inputs.source }}
-          sha256: ${{ inputs.sha256 }}
-          release-token: ${{ steps.roma_read.outputs.token }}
       - name: Install OpenJDK 21 for TLC
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+      - name: Prepare the native qualification environment
+        id: environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d "$RUNNER_TEMP/rules-tla-environment.XXXXXX")
+          mkdir "$scratch/home" "$scratch/bin"
+          ln -s "$(command -v gh)" "$scratch/bin/gh"
+          isolated_path="$scratch/bin:$JAVA_HOME/bin:/usr/bin:/bin"
+          if PATH="$isolated_path" command -v bazel || PATH="$isolated_path" command -v bazelisk; then
+            echo "::error::Bazel must be absent from the qualification PATH."
+            exit 1
+          fi
+          printf 'home=%s\npath=%s\n' "$scratch/home" "$isolated_path" >> "$GITHUB_OUTPUT"
+      - name: Run the released Roma CLI
+        id: roma
+        uses: tomato-bazel/setup-tbzl/roma@5655a95c276f86658edba27108f73fd3199e1b6e
+        env:
+          HOME: ${{ steps.environment.outputs.home }}
+          PATH: ${{ steps.environment.outputs.path }}
+        with:
+          version: ${{ inputs.version }}
+          source: ${{ inputs.source }}
+          sha256: ${{ inputs.sha256 }}
+          release-token: ${{ steps.roma_read.outputs.token }}
+          resolve-native-modules: 'true'
       - name: Qualify native builds, tests, and invariant failures
         shell: bash
         env:
           ROMA: ${{ steps.roma.outputs.executable }}
+          MODULE_SOURCES: ${{ steps.roma.outputs.module-sources }}
+          HOME: ${{ steps.environment.outputs.home }}
+          PATH: ${{ steps.environment.outputs.path }}
         run: |
           set -euo pipefail
           scratch=$(mktemp -d "$RUNNER_TEMP/rules-tla-qualification.XXXXXX")
           trap 'rm -rf "$scratch"' EXIT
-          mkdir "$scratch/home" "$scratch/clean"
+          mkdir "$scratch/clean"
           git archive HEAD | tar -x -C "$scratch/clean"
-
-          export HOME="$scratch/home"
-          export PATH="$JAVA_HOME/bin:/usr/bin:/bin"
-          if command -v bazel || command -v bazelisk; then
-            echo "::error::Bazel must be absent from the qualification PATH."
-            exit 1
-          fi
 
           qualify() (
             cd "$1"
@@ -115,13 +129,13 @@ jobs:
             "$ROMA" test --fetched "$sources/external" //...
           )
 
-          qualify "$PWD"
-          qualify "$PWD"
+          "$ROMA" build --fetched "$MODULE_SOURCES" //...
+          "$ROMA" test --fetched "$MODULE_SOURCES" //...
           test ! -e "$scratch/clean/roma-out"
           qualify "$scratch/clean"
 
           log="$scratch/invariant-probe.log"
-          if "$ROMA" build --fetched "$PWD/roma-out/qualified-modules/external" \
+          if "$ROMA" build --fetched "$MODULE_SOURCES" \
             //examples/failure:must_fail_probe.run 2>&1 | tee "$log"; then
             echo "::error::The intentionally failing target built successfully."
             exit 1
