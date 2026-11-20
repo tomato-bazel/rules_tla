@@ -32,6 +32,18 @@ jobs:
           source: ${{ inputs.source }}
           sha256: ${{ inputs.sha256 }}
           release-token: ${{ vars.ROMA_RELEASE_SECRET_NAME && secrets[vars.ROMA_RELEASE_SECRET_NAME] || '' }}
+      - name: Repeat in a fresh source workspace
+        shell: bash
+        env:
+          ROMA: ${{ steps.roma.outputs.executable }}
+        run: |
+          set -euo pipefail
+          clean_workspace=$(mktemp -d "$RUNNER_TEMP/rules-tla-repeat.XXXXXX")
+          trap 'rm -rf "$clean_workspace"' EXIT
+          git archive HEAD | tar -x -C "$clean_workspace"
+          test ! -e "$clean_workspace/roma-out"
+          "$ROMA" build //... --workspace "$clean_workspace"
+          "$ROMA" test //... --workspace "$clean_workspace"
       - name: Verify failure propagation on the existing negative fixture
         shell: bash
         env:
