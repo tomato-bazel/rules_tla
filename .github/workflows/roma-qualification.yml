@@ -18,6 +18,7 @@ permissions:
   contents: read
 jobs:
   qualify:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ${{ vars.ROMA_QUALIFICATION_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -37,7 +38,9 @@ jobs:
           ROMA: ${{ steps.roma.outputs.executable }}
         run: |
           set -euo pipefail
-          if "$ROMA" build //examples/failure:must_fail_probe.run; then
+          log="$RUNNER_TEMP/roma-invariant-probe.log"
+          if "$ROMA" build //examples/failure:must_fail_probe.run 2>&1 | tee "$log"; then
             echo "::error::The intentionally failing target built successfully."
             exit 1
           fi
+          grep -Fq "rules_tla: expected ok, TLC produced invariant_violation" "$log"
