@@ -24,6 +24,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Mint a Roma release-read token
+        id: roma_read
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FASTVERK_APP_ID }}
+          private-key: ${{ secrets.FASTVERK_APP_PRIVATE_KEY }}
+          owner: tomato-bazel
+          repositories: roma
+          permission-contents: read
       - name: Run the released Roma CLI
         id: roma
         uses: tomato-bazel/setup-tbzl/roma@428328ffda053d43c00e466a6665ead1bec9efd5
@@ -31,7 +40,7 @@ jobs:
           version: ${{ inputs.version }}
           source: ${{ inputs.source }}
           sha256: ${{ inputs.sha256 }}
-          release-token: ${{ vars.ROMA_RELEASE_SECRET_NAME && secrets[vars.ROMA_RELEASE_SECRET_NAME] || '' }}
+          release-token: ${{ steps.roma_read.outputs.token }}
       - name: Repeat with warm and fresh workspaces
         shell: bash
         env:
