@@ -32,12 +32,14 @@ jobs:
           source: ${{ inputs.source }}
           sha256: ${{ inputs.sha256 }}
           release-token: ${{ vars.ROMA_RELEASE_SECRET_NAME && secrets[vars.ROMA_RELEASE_SECRET_NAME] || '' }}
-      - name: Repeat in a fresh source workspace
+      - name: Repeat with warm and fresh workspaces
         shell: bash
         env:
           ROMA: ${{ steps.roma.outputs.executable }}
         run: |
           set -euo pipefail
+          "$ROMA" build //...
+          "$ROMA" test //...
           clean_workspace=$(mktemp -d "$RUNNER_TEMP/rules-tla-repeat.XXXXXX")
           trap 'rm -rf "$clean_workspace"' EXIT
           git archive HEAD | tar -x -C "$clean_workspace"
