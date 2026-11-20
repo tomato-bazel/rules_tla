@@ -1,5 +1,8 @@
 name: Roma release qualification
 on:
+  pull_request:
+    paths:
+      - .github/workflows/roma-qualification.yml
   workflow_dispatch:
     inputs:
       version:
@@ -17,8 +20,30 @@ on:
 permissions:
   contents: read
 jobs:
+  release-access:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a Roma release-read token
+        id: roma_read
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FASTVERK_APP_ID }}
+          private-key: ${{ secrets.FASTVERK_APP_PRIVATE_KEY }}
+          owner: tomato-bazel
+          repositories: roma
+          permission-contents: read
+      - name: Verify access to the published prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.roma_read.outputs.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/tomato-bazel/roma/releases/tags/v0.1.0-alpha.3 --jq '.tag_name')
+          test "$tag" = v0.1.0-alpha.3
+
   qualify:
-    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ${{ vars.ROMA_QUALIFICATION_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
