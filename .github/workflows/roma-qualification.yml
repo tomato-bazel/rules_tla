@@ -82,29 +82,49 @@ jobs:
           source: ${{ inputs.source }}
           sha256: ${{ inputs.sha256 }}
           release-token: ${{ steps.roma_read.outputs.token }}
-      - name: Repeat with warm and fresh workspaces
+      - name: Install OpenJDK 21 for TLC
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Qualify native builds, tests, and invariant failures
         shell: bash
         env:
           ROMA: ${{ steps.roma.outputs.executable }}
         run: |
           set -euo pipefail
-          "$ROMA" build //...
-          "$ROMA" test //...
-          clean_workspace=$(mktemp -d "$RUNNER_TEMP/rules-tla-repeat.XXXXXX")
-          trap 'rm -rf "$clean_workspace"' EXIT
-          git archive HEAD | tar -x -C "$clean_workspace"
-          test ! -e "$clean_workspace/roma-out"
-          "$ROMA" build //... --workspace "$clean_workspace"
-          "$ROMA" test //... --workspace "$clean_workspace"
-      - name: Verify failure propagation on the existing negative fixture
-        shell: bash
-        env:
-          ROMA: ${{ steps.roma.outputs.executable }}
-        run: |
-          set -euo pipefail
-          log="$RUNNER_TEMP/roma-invariant-probe.log"
-          if "$ROMA" build //examples/failure:must_fail_probe.run 2>&1 | tee "$log"; then
+          scratch=$(mktemp -d "$RUNNER_TEMP/rules-tla-qualification.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir "$scratch/home" "$scratch/clean"
+          git archive HEAD | tar -x -C "$scratch/clean"
+
+          export HOME="$scratch/home"
+          export PATH="$JAVA_HOME/bin:/usr/bin:/bin"
+          if command -v bazel || command -v bazelisk; then
+            echo "::error::Bazel must be absent from the qualification PATH."
+            exit 1
+          fi
+
+          qualify() (
+            cd "$1"
+            local sources="$PWD/roma-out/qualified-modules"
+            if [[ ! -d "$sources/external" ]]; then
+              "$ROMA" modules --resolve --include-builtin --out "$sources"
+            fi
+            "$ROMA" build --fetched "$sources/external" //...
+            "$ROMA" test --fetched "$sources/external" //...
+          )
+
+          qualify "$PWD"
+          qualify "$PWD"
+          test ! -e "$scratch/clean/roma-out"
+          qualify "$scratch/clean"
+
+          log="$scratch/invariant-probe.log"
+          if "$ROMA" build --fetched "$PWD/roma-out/qualified-modules/external" \
+            //examples/failure:must_fail_probe.run 2>&1 | tee "$log"; then
             echo "::error::The intentionally failing target built successfully."
             exit 1
           fi
           grep -Fq "rules_tla: expected ok, TLC produced invariant_violation" "$log"
+          grep -Fq "Invariant TypeOK is violated" "$log"
