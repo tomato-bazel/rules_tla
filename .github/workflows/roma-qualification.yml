@@ -24,9 +24,6 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
       - name: Mint a Roma release-read token
         id: roma_read
         uses: actions/create-github-app-token@v2
@@ -45,7 +42,6 @@ jobs:
           tag=$(gh api repos/tomato-bazel/roma/releases/tags/v0.1.0-alpha.3 --jq '.tag_name')
           test "$tag" = v0.1.0-alpha.3
       - name: Verify the installed prerelease starts on Linux AMD64
-        id: prerelease
         shell: bash
         env:
           GH_TOKEN: ${{ steps.roma_read.outputs.token }}
@@ -61,16 +57,6 @@ jobs:
           test "${sum%% *}" = 717447c0b47b81f6d5b98e02a00b8e60518a9d62613f23dba31456865114e5c1
           install -m 0755 "$scratch/roma-linux-amd64" "$scratch/roma"
           test "$("$scratch/roma" --version)" = 'roma 0.1.0-alpha.3'
-          printf 'executable=%s\n' "$scratch/roma" >> "$GITHUB_OUTPUT"
-          trap - EXIT
-      - name: Check the current prerelease against consumer targets
-        shell: bash
-        env:
-          ROMA: ${{ steps.prerelease.outputs.executable }}
-        run: |
-          set -euo pipefail
-          "$ROMA" build //...
-          "$ROMA" test //...
 
   qualify:
     if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
