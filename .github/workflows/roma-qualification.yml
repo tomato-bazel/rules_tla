@@ -1,0 +1,43 @@
+name: Roma release qualification
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published Roma release tag
+        required: true
+        type: string
+      source:
+        description: Full Roma source commit for the release
+        required: true
+        type: string
+      sha256:
+        description: Reviewed Linux AMD64 archive SHA-256
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ${{ vars.ROMA_QUALIFICATION_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run the released Roma CLI
+        id: roma
+        uses: tomato-bazel/setup-tbzl/roma@428328ffda053d43c00e466a6665ead1bec9efd5
+        with:
+          version: ${{ inputs.version }}
+          source: ${{ inputs.source }}
+          sha256: ${{ inputs.sha256 }}
+          release-token: ${{ vars.ROMA_RELEASE_SECRET_NAME && secrets[vars.ROMA_RELEASE_SECRET_NAME] || '' }}
+      - name: Verify failure propagation on the existing negative fixture
+        shell: bash
+        env:
+          ROMA: ${{ steps.roma.outputs.executable }}
+        run: |
+          set -euo pipefail
+          if "$ROMA" build //examples/failure:must_fail_probe.run; then
+            echo "::error::The intentionally failing target built successfully."
+            exit 1
+          fi
