@@ -41,6 +41,22 @@ jobs:
           set -euo pipefail
           tag=$(gh api repos/tomato-bazel/roma/releases/tags/v0.1.0-alpha.3 --jq '.tag_name')
           test "$tag" = v0.1.0-alpha.3
+      - name: Verify the installed prerelease starts on Linux AMD64
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.roma_read.outputs.token }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)/$(uname -m)" = Linux/x86_64
+          scratch=$(mktemp -d "$RUNNER_TEMP/roma-prerelease.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          gh release download v0.1.0-alpha.3 --repo tomato-bazel/roma \
+            --pattern roma-linux-amd64 --dir "$scratch"
+          unset GH_TOKEN
+          sum=$(sha256sum "$scratch/roma-linux-amd64")
+          test "${sum%% *}" = 717447c0b47b81f6d5b98e02a00b8e60518a9d62613f23dba31456865114e5c1
+          install -m 0755 "$scratch/roma-linux-amd64" "$scratch/roma"
+          test "$("$scratch/roma" --version)" = 'roma 0.1.0-alpha.3'
 
   qualify:
     if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
