@@ -96,7 +96,7 @@ jobs:
       # The pilot runs locally on the job runner without build-plane authentication.
       - name: Run the released Roma CLI locally
         id: roma
-        uses: tomato-bazel/setup-tbzl/roma@27f0e583265badc1d38218d59394486f0c49820a
+        uses: tomato-bazel/setup-tbzl/roma@d4198ff8b1317fa5d1f86e5b2bbe9d2d51d139ab # roma-v0.1.0
         env:
           HOME: ${{ steps.environment.outputs.home }}
           PATH: ${{ steps.environment.outputs.path }}
