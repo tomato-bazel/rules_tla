@@ -121,17 +121,20 @@ jobs:
 
           qualify() (
             cd "$1"
-            local sources="$PWD/roma-out/qualified-modules"
-            if [[ ! -d "$sources/external" ]]; then
-              "$ROMA" modules --resolve --include-builtin --out "$sources"
-            fi
-            "$ROMA" build --fetched "$sources/external" //...
-            "$ROMA" test --fetched "$sources/external" //...
+            # Module sources are reusable, but this checkout must start without
+            # a workspace action cache or any TLC outputs from an earlier run.
+            test ! -e roma-out
+            "$ROMA" build --jobs 8 --fetched "$MODULE_SOURCES" //...
+            for target in examples/counter_check examples/sensor_check \
+              examples/failure/deadlocks_check examples/failure/never_settles_check \
+              examples/failure/violates_invariant_check; do
+              test -f "roma-out/bin/$target.run.tlc.ok"
+            done
+            "$ROMA" test --fetched "$MODULE_SOURCES" //...
           )
 
           "$ROMA" build --fetched "$MODULE_SOURCES" //...
           "$ROMA" test --fetched "$MODULE_SOURCES" //...
-          test ! -e "$scratch/clean/roma-out"
           qualify "$scratch/clean"
 
           log="$scratch/invariant-probe.log"
