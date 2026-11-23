@@ -93,9 +93,10 @@ jobs:
             exit 1
           fi
           printf 'home=%s\npath=%s\n' "$scratch/home" "$isolated_path" >> "$GITHUB_OUTPUT"
-      - name: Run the released Roma CLI
+      # The pilot runs locally on the job runner without build-plane authentication.
+      - name: Run the released Roma CLI locally
         id: roma
-        uses: tomato-bazel/setup-tbzl/roma@5655a95c276f86658edba27108f73fd3199e1b6e
+        uses: tomato-bazel/setup-tbzl/roma@27f0e583265badc1d38218d59394486f0c49820a
         env:
           HOME: ${{ steps.environment.outputs.home }}
           PATH: ${{ steps.environment.outputs.path }}
