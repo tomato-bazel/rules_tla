@@ -1,0 +1,148 @@
+name: Roma release qualification
+on:
+  pull_request:
+    paths:
+      - .github/workflows/roma-qualification.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published Roma release tag
+        required: true
+        type: string
+      source:
+        description: Full Roma source commit for the release
+        required: true
+        type: string
+      sha256:
+        description: Reviewed Linux AMD64 archive SHA-256
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  release-access:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a Roma release-read token
+        id: roma_read
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FASTVERK_APP_ID }}
+          private-key: ${{ secrets.FASTVERK_APP_PRIVATE_KEY }}
+          owner: tomato-bazel
+          repositories: roma
+          permission-contents: read
+      - name: Verify access to the published prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.roma_read.outputs.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/tomato-bazel/roma/releases/tags/v0.1.0-alpha.3 --jq '.tag_name')
+          test "$tag" = v0.1.0-alpha.3
+      - name: Verify the installed prerelease starts on Linux AMD64
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.roma_read.outputs.token }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)/$(uname -m)" = Linux/x86_64
+          scratch=$(mktemp -d "$RUNNER_TEMP/roma-prerelease.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          gh release download v0.1.0-alpha.3 --repo tomato-bazel/roma \
+            --pattern roma-linux-amd64 --dir "$scratch"
+          unset GH_TOKEN
+          sum=$(sha256sum "$scratch/roma-linux-amd64")
+          test "${sum%% *}" = 717447c0b47b81f6d5b98e02a00b8e60518a9d62613f23dba31456865114e5c1
+          install -m 0755 "$scratch/roma-linux-amd64" "$scratch/roma"
+          test "$("$scratch/roma" --version)" = 'roma 0.1.0-alpha.3'
+
+  qualify:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ${{ vars.ROMA_QUALIFICATION_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Mint a Roma release-read token
+        id: roma_read
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.FASTVERK_APP_ID }}
+          private-key: ${{ secrets.FASTVERK_APP_PRIVATE_KEY }}
+          owner: tomato-bazel
+          repositories: roma
+          permission-contents: read
+      - name: Install OpenJDK 21 for TLC
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare the native qualification environment
+        id: environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d "$RUNNER_TEMP/rules-tla-environment.XXXXXX")
+          mkdir "$scratch/home" "$scratch/bin"
+          ln -s "$(command -v gh)" "$scratch/bin/gh"
+          isolated_path="$scratch/bin:$JAVA_HOME/bin:/usr/bin:/bin"
+          if PATH="$isolated_path" command -v bazel || PATH="$isolated_path" command -v bazelisk; then
+            echo "::error::Bazel must be absent from the qualification PATH."
+            exit 1
+          fi
+          printf 'home=%s\npath=%s\n' "$scratch/home" "$isolated_path" >> "$GITHUB_OUTPUT"
+      # The pilot runs locally on the job runner without build-plane authentication.
+      - name: Run the released Roma CLI locally
+        id: roma
+        uses: tomato-bazel/setup-tbzl/roma@d4198ff8b1317fa5d1f86e5b2bbe9d2d51d139ab # roma-v0.1.0
+        env:
+          HOME: ${{ steps.environment.outputs.home }}
+          PATH: ${{ steps.environment.outputs.path }}
+        with:
+          version: ${{ inputs.version }}
+          source: ${{ inputs.source }}
+          sha256: ${{ inputs.sha256 }}
+          release-token: ${{ steps.roma_read.outputs.token }}
+          resolve-native-modules: 'true'
+      - name: Qualify native builds, tests, and invariant failures
+        shell: bash
+        env:
+          ROMA: ${{ steps.roma.outputs.executable }}
+          MODULE_SOURCES: ${{ steps.roma.outputs.module-sources }}
+          HOME: ${{ steps.environment.outputs.home }}
+          PATH: ${{ steps.environment.outputs.path }}
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d "$RUNNER_TEMP/rules-tla-qualification.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir "$scratch/clean"
+          git archive HEAD | tar -x -C "$scratch/clean"
+
+          qualify() (
+            cd "$1"
+            # Module sources are reusable, but this checkout must start without
+            # a workspace action cache or any TLC outputs from an earlier run.
+            test ! -e roma-out
+            "$ROMA" build --jobs 8 --fetched "$MODULE_SOURCES" //...
+            for target in examples/counter_check examples/sensor_check \
+              examples/failure/deadlocks_check examples/failure/never_settles_check \
+              examples/failure/violates_invariant_check; do
+              test -f "roma-out/bin/$target.run.tlc.ok"
+            done
+            "$ROMA" test --fetched "$MODULE_SOURCES" //...
+          )
+
+          "$ROMA" build --fetched "$MODULE_SOURCES" //...
+          "$ROMA" test --fetched "$MODULE_SOURCES" //...
+          qualify "$scratch/clean"
+
+          log="$scratch/invariant-probe.log"
+          if "$ROMA" build --fetched "$MODULE_SOURCES" \
+            //examples/failure:must_fail_probe.run 2>&1 | tee "$log"; then
+            echo "::error::The intentionally failing target built successfully."
+            exit 1
+          fi
+          grep -Fq "rules_tla: expected ok, TLC produced invariant_violation" "$log"
+          grep -Fq "Invariant TypeOK is violated" "$log"
